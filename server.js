@@ -10,10 +10,7 @@ const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a
 const DECIMALS = 2;
 const CACHE_TTL = 600_000;
 
-const RPC_BASE    = process.env.RPC_BASE    || null;
-const RPC_POLYGON = process.env.RPC_POLYGON || null;
-const RPC_BNB     = process.env.RPC_BNB     || null;
-const RPC_KAIA    = process.env.RPC_KAIA    || null;
+const RPC_KAIA = process.env.RPC_KAIA || null;
 
 let cache = { data: null, ts: 0 };
 let _reqId = 1;
@@ -168,14 +165,11 @@ async function fetchEVM(rpcUrl) {
   }));
 }
 
-// ── Lisk ────────────────────────────────────────────────────────
-async function fetchLisk() {
-  const res = await fetch(
-    'https://blockscout.lisk.com/api/v2/tokens/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22/holders',
-    { signal: AbortSignal.timeout(15000) }
-  );
+// ── Block explorers ──────────────────────────────────────────────
+async function fetchViaBlockscout(explorerUrl) {
+  const res = await fetch(explorerUrl, { signal: AbortSignal.timeout(15000) });
   const data = await res.json();
-  if (!data.items || data.items.length === 0) throw new Error('No data from Blockscout');
+  if (!data.items || data.items.length === 0) throw new Error('No data from explorer');
   const holders = data.items.slice(0, TOP_N).map(h => ({
     address: h.address.hash,
     balance: (Number(h.value) / Math.pow(10, DECIMALS)).toFixed(DECIMALS),
@@ -185,6 +179,16 @@ async function fetchLisk() {
   const total = holders.reduce((s, h) => s + parseFloat(h.balance), 0);
   holders.forEach(h => h.percentage = total > 0 ? Math.round((parseFloat(h.balance) / total) * 10000) / 100 : 0);
   return holders;
+}
+
+// ── Lisk ────────────────────────────────────────────────────────
+async function fetchLisk() {
+  return fetchViaBlockscout('https://blockscout.lisk.com/api/v2/tokens/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22/holders');
+}
+
+// ── Base ────────────────────────────────────────────────────────
+async function fetchBase() {
+  return fetchViaBlockscout('https://base.blockscout.com/api/v2/tokens/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22/holders');
 }
 
 // ── Solana ──────────────────────────────────────────────────────
@@ -235,11 +239,9 @@ async function fetchSolana() {
 // Polygon & BNB: same address has no contract deployed on those chains.
 const CHAINS = [
   { id: 'base',    name: 'Base',
-    fetch: RPC_BASE ? () => fetchEVM(RPC_BASE) : () => { throw new Error('Configure RPC_BASE env var'); },
-    explorer: `https://basescan.org/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
-  { id: 'polygon', name: 'Polygon',
-    fetch: RPC_POLYGON ? () => fetchEVM(RPC_POLYGON) : () => { throw new Error('No contract at this address'); },
-    explorer: '' },
+    fetch: () => fetchBase(),
+    explorer: `https://base.blockscout.com/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
+  { id: 'polygon', name: 'Polygon', fetch: () => { throw new Error('No contract at this address'); }, explorer: '' },
   { id: 'bnb',     name: 'BNB',     fetch: () => { throw new Error('No contract at this address'); }, explorer: '' },
   { id: 'kaia',    name: 'Kaia',
     fetch: RPC_KAIA ? () => fetchEVM(RPC_KAIA) : () => { throw new Error('Configure RPC_KAIA env var'); },
@@ -304,5 +306,5 @@ module.exports = app;
 
 if (!process.env.VERCEL) {
   app.listen(PORT, () => console.log(`IDRX Dashboard at http://localhost:${PORT}
-  RPCs: Base(1rpc) Polygon(1rpc) BNB(1rpc) Kaia(env) Lisk(Blockscout) Solana(public)`));
+  Base, Lisk: Blockscout API — Solana: public RPC — Kaia: set RPC_KAIA env var`));
 }
