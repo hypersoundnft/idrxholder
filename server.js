@@ -2,9 +2,8 @@ const express = require('express');
 const path = require('path');
 const app = express();
 
-// Solana — lazy import so it doesn't crash Vercel if unavailable
-let solanaWeb3 = null;
-try { solanaWeb3 = require('@solana/web3.js'); } catch (_) { }
+// Solana — not using @solana/web3.js (incompatible with Vercel serverless)
+// Using raw JSON-RPC calls instead
 
 const PORT = process.env.PORT || 3000;
 const CONTRACT = '0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22';
@@ -96,23 +95,43 @@ async function fetchLisk() {
   return holders;
 }
 
-// ── Solana ──────────────────────────────────────────────────────
+// ── Solana via raw RPC ──────────────────────────────────────────
+// Token account layout for SPL Token program (dataSize=165):
+//   mint(32) | owner(32) | amount(u64 LE) | ...
 async function fetchSolana() {
-  if (!solanaWeb3) throw new Error('@solana/web3.js not available');
-  const { Connection, PublicKey } = solanaWeb3;
-  const conn = new Connection('https://api.mainnet-beta.solana.com', { commitment: 'confirmed', confirmTransactionInitialTimeout: 8000 });
-  const mint = new PublicKey(SOL_MINT);
-  const accounts = await conn.getProgramAccounts(
-    new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
-    { filters: [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: mint.toBase58() } }] },
-  );
+  const response = await fetch('https://api.mainnet-beta.solana.com', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1,
+      method: 'getProgramAccounts',
+      params: [
+        'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+        {
+          encoding: 'base64',
+          filters: [
+            { dataSize: 165 },
+            { memcmp: { offset: 0, bytes: SOL_MINT } },
+          ],
+        },
+      ],
+    }),
+  });
+  const json = await response.json();
+  if (json.error) throw new Error(json.error.message || JSON.stringify(json.error));
+
   const holders = [];
-  for (const acc of accounts) {
-    const d = acc.account.data;
-    const owner = new PublicKey(d.slice(32, 64)).toBase58();
-    const amt = d.readBigUInt64LE(64);
-    if (amt > 0n) holders.push({ address: owner, balance: amt });
+  for (const acc of json.result || []) {
+    const data = Buffer.from(acc.account.data[0], 'base64');
+    // offset 32 = owner pubkey (32 bytes), offset 64 = amount (8 bytes LE)
+    const owner = data.slice(32, 64).toString('hex');
+    // Convert to base58-like address (solana addresses are base58 encoded)
+    // Actually we need to decode the pubkey properly. Let's use a simple approach:
+    const ownerB58 = bs58Encode(data.slice(32, 64));
+    const amount = data.readBigUInt64LE(64);
+    if (amount > 0n) holders.push({ address: ownerB58, balance: amount });
   }
+
   holders.sort((a, b) => b.balance > a.balance ? 1 : -1);
   const total = holders.reduce((s, h) => s + h.balance, 0n);
   return holders.slice(0, TOP_N).map(h => ({
@@ -121,6 +140,18 @@ async function fetchSolana() {
     raw: h.balance.toString(),
     percentage: total > 0 ? Math.round(((Number(h.balance) / 1e9) / (Number(total) / 1e9)) * 10000) / 100 : 0,
   }));
+}
+
+// Base58 encode for Solana public keys
+const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+function bs58Encode(buf) {
+  let n = BigInt('0x' + buf.toString('hex'));
+  if (n === 0n) return ALPHABET[0];
+  let result = '';
+  while (n > 0n) { result = ALPHABET[Number(n % 58n)] + result; n /= 58n; }
+  // Leading zero bytes → leading '1's
+  for (const b of buf) { if (b === 0) result = '1' + result; else break; }
+  return result;
 }
 
 // ── Chains ──────────────────────────────────────────────────────
