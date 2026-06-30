@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IDRX Top Holders Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f1117; color: #e1e4e8; padding: 20px; min-height: 100vh;
+  }
+  .container { max-width: 1600px; margin: 0 auto; }
+
+  header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 24px; flex-wrap: wrap; gap: 12px;
+  }
+  header h1 { font-size: 24px; font-weight: 700; color: #f0f6fc; }
+  header h1 span { color: #58a6ff; }
+  .header-meta { font-size: 13px; color: #8b949e; }
+  .refresh-btn {
+    background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+    padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    transition: background .2s;
+  }
+  .refresh-btn:hover { background: #30363d; }
+  .refresh-btn:disabled { opacity: .6; cursor: not-allowed; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 1200px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: #161b22; border: 1px solid #30363d;
+    border-radius: 10px; overflow: hidden;
+  }
+  .card-header {
+    padding: 14px 16px; font-size: 15px; font-weight: 600;
+    border-bottom: 1px solid #30363d; display: flex;
+    justify-content: space-between; align-items: center;
+  }
+  .card-header .badge {
+    font-size: 11px; font-weight: 500; padding: 2px 8px;
+    border-radius: 10px; background: #21262d; color: #8b949e;
+  }
+  .card-body { padding: 0; }
+  .card.error .card-header { color: #f85149; }
+  .card.loading .card-body, .card.no-data .card-body { padding: 32px 16px; text-align: center; font-size: 14px; }
+  .card.loading .card-body { color: #8b949e; }
+  .card.no-data .card-body { color: #484f58; }
+  .card.no-data .rpc-hint { font-size: 12px; color: #58a6ff; margin-top: 8px; }
+
+  .holder-table { width: 100%; border-collapse: collapse; }
+  .holder-table th {
+    text-align: left; font-size: 11px; font-weight: 600; color: #8b949e;
+    padding: 8px 12px; text-transform: uppercase; letter-spacing: .5px;
+    border-bottom: 1px solid #21262d;
+  }
+  .holder-table td {
+    padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #21262d;
+    vertical-align: middle;
+  }
+  .holder-table tr:last-child td { border-bottom: none; }
+  .holder-table tr:hover td { background: rgba(88,166,255,0.04); }
+
+  .rank-col { width: 28px; color: #8b949e; font-size: 11px; text-align: center; }
+  .addr-col { font-family: 'SF Mono', 'Monaco', 'Menlo', monospace; font-size: 12px; }
+  .addr-col a { color: #58a6ff; text-decoration: none; }
+  .addr-col a:hover { text-decoration: underline; }
+  .bal-col { text-align: right; font-family: 'SF Mono', 'Monaco', 'Menlo', monospace; font-size: 12px; }
+  .pct-col { text-align: right; width: 70px; font-size: 11px; color: #8b949e; white-space: nowrap; }
+
+  .bar-wrap { display: inline-block; width: 50px; height: 4px; background: #21262d; border-radius: 2px; vertical-align: middle; margin-left: 4px; }
+  .bar-fill { height: 100%; border-radius: 2px; background: #58a6ff; transition: width .3s; }
+
+  footer { margin-top: 24px; text-align: center; font-size: 12px; color: #484f58; }
+
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #30363d; border-top-color: #58a6ff; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div>
+      <h1>IDRX <span>Top Holders</span></h1>
+      <div class="header-meta">Last updated: <span id="updated">—</span></div>
+    </div>
+    <button class="refresh-btn" id="refreshBtn" onclick="refresh()">🔄 Refresh</button>
+  </header>
+
+  <div class="grid" id="grid"></div>
+  <footer>IDRX Dashboard — Data from public RPCs, Blockscout, and Solana RPC</footer>
+</div>
+
+<script>
+const CHAINS = [
+  { id: 'base',    name: 'Base',    color: '#0052FF', explorer: (a) => `https://basescan.org/address/${a}` },
+  { id: 'polygon', name: 'Polygon', color: '#8247E5', explorer: null },
+  { id: 'bnb',     name: 'BNB',     color: '#F0B90B', explorer: null },
+  { id: 'kaia',    name: 'Kaia',    color: '#56447A', explorer: (a) => `https://kaiascan.io/address/${a}` },
+  { id: 'lisk',    name: 'Lisk',    color: '#2F68F8', explorer: (a) => `https://blockscout.lisk.com/address/${a}` },
+  { id: 'solana',  name: 'Solana',  color: '#9945FF', explorer: (a) => `https://solscan.io/account/${a}` },
+];
+
+function truncate(a) { return a.length > 16 ? a.slice(0, 6) + '...' + a.slice(-4) : a; }
+
+function formatBal(b) {
+  const n = parseFloat(b);
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K';
+  if (n >= 1) return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (n > 0) return n.toFixed(2);
+  return '0';
+}
+
+function renderCard(chain, state) {
+  const card = document.createElement('div');
+  card.className = 'card';
+
+  if (state === 'loading') {
+    card.className += ' loading';
+    card.innerHTML = `<div class="card-header" style="border-left:3px solid ${chain.color}"><span>${chain.name}</span></div><div class="card-body"><span class="spinner"></span>Loading…</div>`;
+    return card;
+  }
+
+  const h = state.holders;
+  const err = state.error;
+  const hasData = h && h.length > 0;
+
+  if (err) {
+    card.className += ' error';
+    const isConfigErr = err.includes('Set env');
+    card.innerHTML = `<div class="card-header" style="border-left:3px solid ${chain.color}"><span>${chain.name}</span></div><div class="card-body no-data">${isConfigErr ? '⚠ Needs RPC config' : '⚠ ' + err.slice(0, 60)}${isConfigErr ? '<div class="rpc-hint">Configure in .env or env vars</div>' : ''}</div>`;
+    return card;
+  }
+
+  if (!hasData) {
+    card.className += ' no-data';
+    card.innerHTML = `<div class="card-header" style="border-left:3px solid ${chain.color}"><span>${chain.name}</span></div><div class="card-body">No holders found</div>`;
+    return card;
+  }
+
+  const maxBal = parseFloat(h[0].balance) || 1;
+  let rows = '';
+  h.forEach((x, i) => {
+    const pctBar = (parseFloat(x.balance) / maxBal) * 100;
+    rows += `<tr>
+      <td class="rank-col">${i + 1}</td>
+      <td class="addr-col">${chain.explorer ? `<a href="${chain.explorer(x.address)}" target="_blank" rel="noopener">${truncate(x.address)}</a>` : truncate(x.address)}</td>
+      <td class="bal-col">${formatBal(x.balance)}</td>
+      <td class="pct-col">${(x.percentage || 0).toFixed(1)}%<span class="bar-wrap"><span class="bar-fill" style="width:${Math.min(pctBar, 100)}%"></span></span></td>
+    </tr>`;
+  });
+
+  card.innerHTML = `<div class="card-header" style="border-left:3px solid ${chain.color}"><span>${chain.name}</span><span class="badge">${h.length} holders</span></div><table class="holder-table"><thead><tr><th>#</th><th>Address</th><th style="text-align:right">Balance</th><th style="text-align:right">%</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return card;
+}
+
+async function refresh() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Loading…';
+  document.getElementById('updated').textContent = 'fetching…';
+
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  CHAINS.forEach(c => grid.appendChild(renderCard(c, 'loading')));
+
+  try {
+    const res = await fetch('/api/holders');
+    const data = await res.json();
+    grid.innerHTML = '';
+    CHAINS.forEach(c => {
+      const d = data[c.id] || { holders: [], error: 'No response' };
+      grid.appendChild(renderCard(c, d));
+    });
+    document.getElementById('updated').textContent = new Date().toLocaleTimeString();
+  } catch (err) {
+    document.getElementById('updated').textContent = 'error — ' + err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 Refresh';
+  }
+}
+
+refresh();
+</script>
+</body>
+</html>
