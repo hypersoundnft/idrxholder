@@ -12,7 +12,7 @@ const DECIMALS = 2;
 const CACHE_TTL = 600_000;
 
 const RPC_KAIA = process.env.RPC_KAIA || 'https://klaytn.drpc.org';
-const RPC_BNB = process.env.RPC_BNB || 'https://bsc.drpc.org';
+const RPC_BNB = process.env.RPC_BNB || '';
 
 let cache = { data: null, ts: 0 };
 let _reqId = 1;
@@ -247,7 +247,7 @@ const CHAINS = [
     fetch: () => fetchViaBlockscout(`https://polygon.blockscout.com/api/v2/tokens/${CONTRACT2}/holders`),
     explorer: `https://polygon.blockscout.com/token/${CONTRACT2}?a=` },
   { id: 'bnb',     name: 'BNB',
-    fetch: () => fetchEVM(RPC_BNB, CONTRACT2),
+    fetch: () => { if (!RPC_BNB) throw new Error('Set RPC_BNB env var (needs archive-compatible BSC RPC)'); return fetchEVM(RPC_BNB, CONTRACT2); },
     explorer: `https://bscscan.com/token/${CONTRACT2}?a=` },
   { id: 'kaia',    name: 'Kaia',
     fetch: () => fetchEVM(RPC_KAIA, CONTRACT, 210_686_000n),
