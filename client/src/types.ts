@@ -6,7 +6,7 @@ export interface Holder {
   chains?: string[]
 }
 
-export type ChainId = 'base' | 'polygon' | 'bnb' | 'kaia' | 'lisk' | 'solana' | 'combined'
+export type ChainId = 'base' | 'polygon' | 'bnb' | 'kaia' | 'lisk' | 'solana'
 
 export interface ChainResult {
   name: string

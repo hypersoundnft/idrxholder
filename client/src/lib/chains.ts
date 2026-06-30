@@ -7,7 +7,6 @@ export const CHAINS: ChainConfig[] = [
   { id: 'kaia',    name: 'Kaia',    color: '#56447A', explorer: (a: string) => `https://kaiascan.io/address/${a}` },
   { id: 'lisk',    name: 'Lisk',    color: '#2F68F8', explorer: (a: string) => `https://blockscout.lisk.com/address/${a}` },
   { id: 'solana',  name: 'Solana',  color: '#9945FF', explorer: (a: string) => `https://solscan.io/account/${a}` },
-  { id: 'combined',name: 'Total (All EVM)', color: '#FF6B35', explorer: (a: string) => `https://base.blockscout.com/address/${a}` },
 ]
 
 export const CHAIN_LABELS: Record<string, string> = {

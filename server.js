@@ -281,41 +281,10 @@ app.get('/api/holders', async (req, res) => {
   if (cache.data && now - cache.ts < CACHE_TTL) return res.json(cache.data);
   const raw = await fetchAll();
 
-  const combined = new Map();
-  for (const [id, chain] of Object.entries(raw)) {
-    if (chain.error) continue;
-    for (const h of chain.holders) {
-      const key = id === 'solana' ? 'sol:' + h.address : h.address.toLowerCase();
-      const ex = combined.get(key) || { address: h.address, totalBal: 0, chains: [], isSol: false };
-      ex.totalBal += parseFloat(h.balance);
-      if (id === 'solana') { ex.isSol = true; ex.address = h.address; }
-      if (!ex.chains.includes(id)) ex.chains.push(id);
-      combined.set(key, ex);
-    }
-  }
-  const combHolders = [...combined.values()]
-    .filter(h => h.totalBal > 0)
-    .sort((a, b) => b.totalBal - a.totalBal)
-    .slice(0, TOP_N);
-  const combTotal = combHolders.reduce((s, h) => s + h.totalBal, 0);
-  const formatted = combHolders.map(h => ({
-    address: h.address,
-    balance: formatBalStr(h.totalBal),
-    raw: h.totalBal.toString(),
-    percentage: combTotal > 0 ? Math.round((h.totalBal / combTotal) * 10000) / 100 : 0,
-    chains: h.chains,
-  }));
-  cache.data = { ...raw, combined: { name: 'Total (All EVM)', holders: formatted, error: null } };
+  cache.data = raw;
   cache.ts = Date.now();
   res.json(cache.data);
 });
-
-function formatBalStr(n) {
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K';
-  return n.toFixed(2);
-}
 
 app.use(express.static(path.join(__dirname, 'client', 'dist')));
 app.use((err, req, res, next) => { res.status(500).json({ error: err.message || 'Internal error' }); });
