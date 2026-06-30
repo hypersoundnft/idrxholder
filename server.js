@@ -65,21 +65,6 @@ async function detectRPC(rpcUrl) {
       }
     }
     if (!success) continue;
-
-    // Check archive access with a tiny range 100K blocks back
-    if (latest > 100_000n) {
-      const testFrom = latest - BigInt(100_000);
-      const to = testFrom + 49n > latest ? latest : testFrom + 49n;
-      try {
-        await rpc(rpcUrl, 'eth_getLogs', [{
-          address: CONTRACT, topics: [TRANSFER_TOPIC],
-          fromBlock: `0x${testFrom.toString(16)}`, toBlock: `0x${to.toString(16)}`,
-        }]);
-      } catch (e) {
-        if (e.message.toLowerCase().includes('pruned')) throw new Error('RPC is pruned — needs an archive node');
-        // archive check failed but RPC still usable for recent data
-      }
-    }
     return { batchSize: size };
   }
   throw new Error('RPC unavailable or incompatible');
@@ -95,17 +80,26 @@ async function findFirstTransfer(rpcUrl, batchSize) {
     const mid = (lo + hi) / 2n;
     const from = mid;
     const to = mid + BigInt(batchSize) - 1n > hi ? hi : mid + BigInt(batchSize) - 1n;
+    let logs = [];
     try {
-      const logs = await rpc(rpcUrl, 'eth_getLogs', [{
+      logs = await rpc(rpcUrl, 'eth_getLogs', [{
         address: CONTRACT, topics: [TRANSFER_TOPIC],
         fromBlock: `0x${from.toString(16)}`, toBlock: `0x${to.toString(16)}`,
       }]);
-      if (logs.length > 0) hi = to;
-      else lo = to + 1n;
-    } catch (_) {
-      // if range too large, halve it
-      hi = mid;
+    } catch (e) {
+      const msg = e.message.toLowerCase();
+      if (msg.includes('rate') || msg.includes('too many') || msg.includes('temporary') || msg.includes('timeout')) {
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          logs = await rpc(rpcUrl, 'eth_getLogs', [{
+            address: CONTRACT, topics: [TRANSFER_TOPIC],
+            fromBlock: `0x${from.toString(16)}`, toBlock: `0x${to.toString(16)}`,
+          }]);
+        } catch (_) { /* give up this round */ }
+      }
     }
+    if (logs.length > 0) hi = to;
+    else lo = to + 1n;
   }
 
   // Pinpoint exact block
