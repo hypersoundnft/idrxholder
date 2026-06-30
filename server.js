@@ -246,9 +246,12 @@ const CHAINS = [
 
 async function fetchAll() {
   const results = {};
-  await Promise.all(CHAINS.map(async (c) => {
+  await Promise.allSettled(CHAINS.map(async (c) => {
     try {
-      const holders = await c.fetch();
+      const holders = await Promise.race([
+        c.fetch(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('RPC timeout (15s)')), 15000))
+      ]);
       results[c.id] = { name: c.name, holders, error: null };
     } catch (err) {
       results[c.id] = { name: c.name, holders: [], error: err.message };
@@ -262,33 +265,34 @@ app.get('/api/holders', async (req, res) => {
   if (cache.data && now - cache.ts < CACHE_TTL) return res.json(cache.data);
   const raw = await fetchAll();
 
-  // Combined: aggregate same EVM address across chains (excl Solana)
+  // Combined: sum human-readable balances across all chains per address
   const combined = new Map();
   for (const [id, chain] of Object.entries(raw)) {
-    if (id === 'solana' || chain.error) continue;
+    if (chain.error) continue;
     for (const h of chain.holders) {
-      const a = h.address.toLowerCase();
-      const ex = combined.get(a) || { address: h.address, totalRaw: 0n, chains: [] };
-      ex.totalRaw += BigInt(h.raw);
+      const key = id === 'solana' ? 'sol:' + h.address : h.address.toLowerCase();
+      const ex = combined.get(key) || { address: h.address, totalBal: 0, chains: [], isSol: false };
+      ex.totalBal += parseFloat(h.balance);
+      if (id === 'solana') { ex.isSol = true; ex.address = h.address; }
       if (!ex.chains.includes(id)) ex.chains.push(id);
-      combined.set(a, ex);
+      combined.set(key, ex);
     }
   }
   const combHolders = [...combined.values()]
-    .filter(h => h.totalRaw > 0n)
-    .sort((a, b) => b.totalRaw > a.totalRaw ? 1 : -1)
+    .filter(h => h.totalBal > 0)
+    .sort((a, b) => b.totalBal - a.totalBal)
     .slice(0, TOP_N)
     .map(h => ({
       address: h.address,
-      balance: (Number(h.totalRaw) / Math.pow(10, DECIMALS)).toFixed(DECIMALS),
-      raw: h.totalRaw.toString(),
+      balance: h.totalBal.toLocaleString('en-US', { maximumFractionDigits: 2 }),
+      raw: h.totalBal.toString(),
       percentage: 0,
       chains: h.chains,
     }));
-  const combTotal = combHolders.reduce((s, h) => s + parseFloat(h.balance), 0);
-  combHolders.forEach(h => h.percentage = combTotal > 0 ? Math.round((parseFloat(h.balance) / combTotal) * 10000) / 100 : 0);
+  const combTotal = combHolders.reduce((s, h) => s + h.totalBal, 0);
+  combHolders.forEach(h => h.percentage = combTotal > 0 ? Math.round((h.totalBal / combTotal) * 10000) / 100 : 0);
 
-  cache.data = { ...raw, combined: { name: 'Total (All EVM)', holders: combHolders, error: null } };
+  cache.data = { ...raw, combined: { name: 'Total (All Chains)', holders: combHolders, error: null } };
   cache.ts = Date.now();
   res.json(cache.data);
 });
