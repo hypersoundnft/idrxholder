@@ -317,7 +317,7 @@ function formatBalStr(n) {
   return n.toFixed(2);
 }
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'client', 'dist')));
 app.use((err, req, res, next) => { res.status(500).json({ error: err.message || 'Internal error' }); });
 
 module.exports = app;
