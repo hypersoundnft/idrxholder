@@ -40,7 +40,7 @@ async function detectRPC(rpcUrl, contractAddr) {
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
   const latest = BigInt(latestHex);
 
-  for (const size of [100, 50, 10, 1]) {
+  for (const size of [10000, 1000, 100, 50, 10, 1]) {
     const from = latest - BigInt(size) > 0n ? latest - BigInt(size) : 0n;
     let success = false;
     for (let retry = 0; retry < 3 && !success; retry++) {
@@ -119,7 +119,7 @@ async function fetchEVM(rpcUrl, contractAddr, knownFloor = 0n) {
   const latest = BigInt(latestHex);
   const balances = new Map();
   const zeroAddr = '0x0000000000000000000000000000000000000000';
-  const MAX_BATCHES = 500;
+  const MAX_BATCHES = 300; // ~3M blocks at 10K batch, fits in Vercel 10s hobby limit
 
   let lo = knownFloor > 0n ? knownFloor : 0n;
   let totalBatches = 0;
@@ -249,7 +249,7 @@ const CHAINS = [
     fetch: () => { throw new Error('BSC RPCs require archive node for historical logs. Contract is deployed at 0x649a...742cc'); },
     explorer: `https://bscscan.com/token/${CONTRACT2}?a=` },
   { id: 'kaia',    name: 'Kaia',
-    fetch: () => fetchEVM(RPC_KAIA, CONTRACT, 210_600_000n),
+    fetch: () => fetchEVM(RPC_KAIA, CONTRACT, 210_686_000n),
     explorer: `https://kaiascan.io/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
   { id: 'lisk',    name: 'Lisk',
     fetch: () => fetchViaBlockscout('https://blockscout.lisk.com/api/v2/tokens/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22/holders'),
