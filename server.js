@@ -40,7 +40,7 @@ async function detectRPC(rpcUrl, contractAddr) {
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
   const latest = BigInt(latestHex);
 
-  for (const size of [1000, 100, 50, 10, 1]) {
+  for (const size of [100, 50, 10, 1]) {
     const from = latest - BigInt(size) > 0n ? latest - BigInt(size) : 0n;
     let success = false;
     for (let retry = 0; retry < 3 && !success; retry++) {
@@ -111,46 +111,52 @@ async function findFirstTransfer(rpcUrl, batchSize, contractAddr, knownFloor = 0
   return null;
 }
 
-// ── EVM: auto-detect + parallel scan ───────────────────────────
+// ── EVM: backward scan from tip until no transfers found ──────────
+// Much faster: only scans the active recent range instead of all blocks
 async function fetchEVM(rpcUrl, contractAddr, knownFloor = 0n) {
   const batchSize = await detectRPC(rpcUrl, contractAddr);
-
-  const firstBlock = await findFirstTransfer(rpcUrl, batchSize, contractAddr, knownFloor);
-  if (firstBlock === null) return [];
 
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
   const latest = BigInt(latestHex);
   const balances = new Map();
   const zeroAddr = '0x0000000000000000000000000000000000000000';
-  const CONCURRENCY = batchSize <= 100 ? 10 : 6;
+  const CONCURRENCY = 10;
 
-  const maxScanBlocks = batchSize <= 100 ? 500_000n : (latest - firstBlock);
-  const scanEnd = firstBlock + maxScanBlocks > latest ? latest : firstBlock + maxScanBlocks;
-  const ranges = [];
-  for (let b = firstBlock; b <= scanEnd; b += BigInt(batchSize)) {
-    const to = b + BigInt(batchSize) - 1n > scanEnd ? scanEnd : b + BigInt(batchSize) - 1n;
-    ranges.push({ from: b, to });
-  }
+  // Scan backward from latest in chunks. Stop when we hit 5 consecutive empty chunks
+  // or pass the known floor, whichever comes first.
+  let lo = knownFloor > 0n ? knownFloor : 0n;
+  let tip = latest;
+  let emptyStreak = 0;
+  let totalBatches = 0;
+  const MAX_BATCHES = 500; // safety cap (approx 500K blocks at 1K batch, 25K at 50 batch)
 
-  for (let i = 0; i < ranges.length; i += CONCURRENCY) {
-    const chunk = ranges.slice(i, i + CONCURRENCY);
-    const results = await Promise.allSettled(chunk.map(r => 
-      rpc(rpcUrl, 'eth_getLogs', [{
-        address: contractAddr, topics: [TRANSFER_TOPIC],
-        fromBlock: `0x${r.from.toString(16)}`, toBlock: `0x${r.to.toString(16)}`,
-      }])
-    ));
-    for (let j = 0; j < results.length; j++) {
-      const logs = results[j].status === 'fulfilled' ? results[j].value : [];
-      for (const log of logs) {
-        const f = parseAddr(log.topics[1]), t = parseAddr(log.topics[2]);
-        const v = BigInt(log.data);
-        if (f !== zeroAddr) balances.set(f, (balances.get(f) || 0n) - v);
-        if (t !== zeroAddr) balances.set(t, (balances.get(t) || 0n) + v);
-      }
+  while (tip > lo && totalBatches < MAX_BATCHES) {
+    const from = tip - BigInt(batchSize) > lo ? tip - BigInt(batchSize) : lo;
+
+    const logs = await rpc(rpcUrl, 'eth_getLogs', [{
+      address: contractAddr, topics: [TRANSFER_TOPIC],
+      fromBlock: `0x${from.toString(16)}`, toBlock: `0x${tip.toString(16)}`,
+    }]);
+
+    totalBatches++;
+    for (const log of logs) {
+      const f = parseAddr(log.topics[1]), t = parseAddr(log.topics[2]);
+      const v = BigInt(log.data);
+      if (f !== zeroAddr) balances.set(f, (balances.get(f) || 0n) - v);
+      if (t !== zeroAddr) balances.set(t, (balances.get(t) || 0n) + v);
     }
+
+    if (logs.length === 0) {
+      emptyStreak++;
+      if (emptyStreak >= 5) break; // no transfers in a while — we've gone past all activity
+    } else {
+      emptyStreak = 0;
+    }
+
+    tip = from - 1n;
   }
 
+  if (balances.size === 0) return [];
   const holders = [];
   for (const [addr, bal] of balances) if (bal > 0n) holders.push({ address: addr, balance: bal });
   holders.sort((a, b) => b.balance > a.balance ? 1 : -1);
@@ -234,7 +240,7 @@ const CHAINS = [
     fetch: () => { throw new Error('BSC RPCs require archive node for historical logs. Contract is deployed at 0x649a...742cc'); },
     explorer: `https://bscscan.com/token/${CONTRACT2}?a=` },
   { id: 'kaia',    name: 'Kaia',
-    fetch: () => fetchEVM(RPC_KAIA, CONTRACT, 210_680_000n),
+    fetch: () => fetchEVM(RPC_KAIA, CONTRACT, 210_600_000n),
     explorer: `https://kaiascan.io/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
   { id: 'lisk',    name: 'Lisk',
     fetch: () => fetchViaBlockscout('https://blockscout.lisk.com/api/v2/tokens/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22/holders'),
@@ -250,7 +256,7 @@ async function fetchAll() {
     try {
       const holders = await Promise.race([
         c.fetch(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('RPC timeout (15s)')), 15000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error('RPC timeout (30s)')), 30000))
       ]);
       results[c.id] = { name: c.name, holders, error: null };
     } catch (err) {
