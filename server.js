@@ -231,10 +231,10 @@ const CHAINS = [
     fetch: () => fetchViaBlockscout(`https://polygon.blockscout.com/api/v2/tokens/${CONTRACT2}/holders`),
     explorer: `https://polygon.blockscout.com/token/${CONTRACT2}?a=` },
   { id: 'bnb',     name: 'BNB',
-    fetch: () => fetchEVM('https://bsc-mainnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3', CONTRACT2),
+    fetch: () => { throw new Error('BSC RPCs require archive node for historical logs. Contract is deployed at 0x649a...742cc'); },
     explorer: `https://bscscan.com/token/${CONTRACT2}?a=` },
   { id: 'kaia',    name: 'Kaia',
-    fetch: () => fetchEVM(RPC_KAIA, CONTRACT, 210_686_600n),
+    fetch: () => fetchEVM(RPC_KAIA, CONTRACT, 210_600_000n),
     explorer: `https://kaiascan.io/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
   { id: 'lisk',    name: 'Lisk',
     fetch: () => fetchViaBlockscout('https://blockscout.lisk.com/api/v2/tokens/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22/holders'),
@@ -281,16 +281,23 @@ app.get('/api/holders', async (req, res) => {
   const combHolders = [...combined.values()]
     .filter(h => h.totalBal > 0)
     .sort((a, b) => b.totalBal - a.totalBal)
-    .slice(0, TOP_N)
-    .map(h => ({
-      address: h.address,
-      balance: h.totalBal.toLocaleString('en-US', { maximumFractionDigits: 2 }),
-      raw: h.totalBal.toString(),
-      percentage: 0,
-      chains: h.chains,
-    }));
+    .slice(0, TOP_N);
   const combTotal = combHolders.reduce((s, h) => s + h.totalBal, 0);
-  combHolders.forEach(h => h.percentage = combTotal > 0 ? Math.round((h.totalBal / combTotal) * 10000) / 100 : 0);
+  return combHolders.map(h => ({
+    address: h.address,
+    balance: formatNumber(h.totalBal),
+    raw: h.totalBal.toString(),
+    percentage: combTotal > 0 ? Math.round((h.totalBal / combTotal) * 10000) / 100 : 0,
+    chains: h.chains,
+  }));
+}
+
+function formatNumber(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K';
+  return n.toFixed(2);
+}
 
   cache.data = { ...raw, combined: { name: 'Total (All Chains)', holders: combHolders, error: null } };
   cache.ts = Date.now();
