@@ -265,7 +265,6 @@ app.get('/api/holders', async (req, res) => {
   if (cache.data && now - cache.ts < CACHE_TTL) return res.json(cache.data);
   const raw = await fetchAll();
 
-  // Combined: sum human-readable balances across all chains per address
   const combined = new Map();
   for (const [id, chain] of Object.entries(raw)) {
     if (chain.error) continue;
@@ -285,24 +284,22 @@ app.get('/api/holders', async (req, res) => {
   const combTotal = combHolders.reduce((s, h) => s + h.totalBal, 0);
   const formatted = combHolders.map(h => ({
     address: h.address,
-    balance: formatNumber(h.totalBal),
+    balance: formatBalStr(h.totalBal),
     raw: h.totalBal.toString(),
     percentage: combTotal > 0 ? Math.round((h.totalBal / combTotal) * 10000) / 100 : 0,
     chains: h.chains,
   }));
-}
+  cache.data = { ...raw, combined: { name: 'Total (All Chains)', holders: formatted, error: null } };
+  cache.ts = Date.now();
+  res.json(cache.data);
+});
 
-function formatNumber(n) {
+function formatBalStr(n) {
   if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
   if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K';
   return n.toFixed(2);
 }
-
-  cache.data = { ...raw, combined: { name: 'Total (All Chains)', holders: formatted, error: null } };
-  cache.ts = Date.now();
-  res.json(cache.data);
-});
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use((err, req, res, next) => { res.status(500).json({ error: err.message || 'Internal error' }); });
