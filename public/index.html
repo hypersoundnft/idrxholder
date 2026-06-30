@@ -110,12 +110,12 @@
 <script>
 const CHAINS = [
   { id: 'base',    name: 'Base',    color: '#0052FF', explorer: (a) => `https://base.blockscout.com/address/${a}` },
-  { id: 'polygon', name: 'Polygon', color: '#8247E5', explorer: null },
-  { id: 'bnb',     name: 'BNB',     color: '#F0B90B', explorer: null },
+  { id: 'polygon', name: 'Polygon', color: '#8247E5', explorer: (a) => `https://polygon.blockscout.com/address/${a}` },
+  { id: 'bnb',     name: 'BNB',     color: '#F0B90B', explorer: (a) => `https://bscscan.com/address/${a}` },
   { id: 'kaia',    name: 'Kaia',    color: '#56447A', explorer: (a) => `https://kaiascan.io/address/${a}` },
   { id: 'lisk',    name: 'Lisk',    color: '#2F68F8', explorer: (a) => `https://blockscout.lisk.com/address/${a}` },
   { id: 'solana',  name: 'Solana',  color: '#9945FF', explorer: (a) => `https://solscan.io/account/${a}` },
-  { id: 'combined',name: 'Total (All EVM)', color: '#FF6B35', explorer: (a) => `https://basescan.org/address/${a}` },
+  { id: 'combined',name: 'Total (All EVM)', color: '#FF6B35', explorer: (a) => `https://base.blockscout.com/address/${a}` },
 ];
 
 const CHAIN_LABELS = { base:'Base', polygon:'Polygon', bnb:'BNB', kaia:'Kaia', lisk:'Lisk', solana:'Solana' };

@@ -4,13 +4,14 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const CONTRACT = '0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22';
+const CONTRACT2 = '0x649a2da7b28e0d54c13d5eff95d3a660652742cc'; // Polygon + BNB
 const SOL_MINT = 'idrxZcP8xiKkYk6XGD4uz1dxEYCWSgKDHqgjsBbwDur';
 const TOP_N = 20;
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const DECIMALS = 2;
 const CACHE_TTL = 600_000;
 
-const RPC_KAIA = process.env.RPC_KAIA || null;
+const RPC_KAIA = process.env.RPC_KAIA || 'https://klaytn.drpc.org';
 
 let cache = { data: null, ts: 0 };
 let _reqId = 1;
@@ -34,41 +35,40 @@ async function rpc(url, method, params) {
 
 function parseAddr(hex) { return '0x' + hex.slice(26).toLowerCase(); }
 
-// ── Detect RPC capabilities (probes from largest to smallest) ──
-async function detectRPC(rpcUrl) {
+// ── Detect RPC capabilities ────────────────────────────────────
+async function detectRPC(rpcUrl, contractAddr) {
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
   const latest = BigInt(latestHex);
 
-  // Try large (10K) first, fall back to smaller — with retry on rate limits
   for (const size of [10000, 2000, 500, 100, 50, 10, 1]) {
     const from = latest - BigInt(size) > 0n ? latest - BigInt(size) : 0n;
     let success = false;
     for (let retry = 0; retry < 3 && !success; retry++) {
       try {
         await rpc(rpcUrl, 'eth_getLogs', [{
-          address: CONTRACT, topics: [TRANSFER_TOPIC],
+          address: contractAddr, topics: [TRANSFER_TOPIC],
           fromBlock: `0x${from.toString(16)}`, toBlock: `0x${latest.toString(16)}`,
         }]);
         success = true;
       } catch (e) {
         const msg = e.message.toLowerCase();
         if (msg.includes('pruned')) throw new Error('RPC is pruned — needs an archive node');
-        if (msg.includes('range') || msg.includes('limited') || msg.includes('max')) break; // try smaller
+        if (msg.includes('range') || msg.includes('limited') || msg.includes('max')) break;
         if (msg.includes('timeout') || msg.includes('too many') || msg.includes('rate limit') || msg.includes('temporary')) {
-          await new Promise(r => setTimeout(r, 500 * (retry + 1))); // backoff
+          await new Promise(r => setTimeout(r, 500 * (retry + 1)));
           continue;
         }
         throw e;
       }
     }
     if (!success) continue;
-    return { batchSize: size };
+    return size;
   }
   throw new Error('RPC unavailable or incompatible');
 }
 
 // ── EVM: binary search for first transfer block ─────────────────
-async function findFirstTransfer(rpcUrl, batchSize) {
+async function findFirstTransfer(rpcUrl, batchSize, contractAddr) {
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
   const latest = BigInt(latestHex);
   let lo = 0n, hi = latest;
@@ -80,7 +80,7 @@ async function findFirstTransfer(rpcUrl, batchSize) {
     let logs = [];
     try {
       logs = await rpc(rpcUrl, 'eth_getLogs', [{
-        address: CONTRACT, topics: [TRANSFER_TOPIC],
+        address: contractAddr, topics: [TRANSFER_TOPIC],
         fromBlock: `0x${from.toString(16)}`, toBlock: `0x${to.toString(16)}`,
       }]);
     } catch (e) {
@@ -89,20 +89,19 @@ async function findFirstTransfer(rpcUrl, batchSize) {
         await new Promise(r => setTimeout(r, 1000));
         try {
           logs = await rpc(rpcUrl, 'eth_getLogs', [{
-            address: CONTRACT, topics: [TRANSFER_TOPIC],
+            address: contractAddr, topics: [TRANSFER_TOPIC],
             fromBlock: `0x${from.toString(16)}`, toBlock: `0x${to.toString(16)}`,
           }]);
-        } catch (_) { /* give up this round */ }
+        } catch (_) {}
       }
     }
     if (logs.length > 0) hi = to;
     else lo = to + 1n;
   }
 
-  // Pinpoint exact block
   for (let b = lo; b <= hi; b++) {
     const logs = await rpc(rpcUrl, 'eth_getLogs', [{
-      address: CONTRACT, topics: [TRANSFER_TOPIC],
+      address: contractAddr, topics: [TRANSFER_TOPIC],
       fromBlock: `0x${b.toString(16)}`, toBlock: `0x${b.toString(16)}`,
     }]);
     if (logs.length > 0) return b;
@@ -111,20 +110,18 @@ async function findFirstTransfer(rpcUrl, batchSize) {
 }
 
 // ── EVM: auto-detect + parallel scan ───────────────────────────
-async function fetchEVM(rpcUrl) {
-  const { batchSize } = await detectRPC(rpcUrl);
+async function fetchEVM(rpcUrl, contractAddr) {
+  const batchSize = await detectRPC(rpcUrl, contractAddr);
 
-  const firstBlock = await findFirstTransfer(rpcUrl, batchSize);
+  const firstBlock = await findFirstTransfer(rpcUrl, batchSize, contractAddr);
   if (firstBlock === null) return [];
 
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
   const latest = BigInt(latestHex);
   const balances = new Map();
   const zeroAddr = '0x0000000000000000000000000000000000000000';
-  const CONCURRENCY = batchSize <= 100 ? 10 : 6; // avoid rate limiting on free RPCs
+  const CONCURRENCY = batchSize <= 100 ? 10 : 6;
 
-  // Build range chunks — scan from firstBlock forward.
-  // With small batch sizes (e.g. 50), cap at 500K blocks so the scan completes in time.
   const maxScanBlocks = batchSize <= 100 ? 500_000n : (latest - firstBlock);
   const scanEnd = firstBlock + maxScanBlocks > latest ? latest : firstBlock + maxScanBlocks;
   const ranges = [];
@@ -133,12 +130,11 @@ async function fetchEVM(rpcUrl) {
     ranges.push({ from: b, to });
   }
 
-  // Process in concurrent batches
   for (let i = 0; i < ranges.length; i += CONCURRENCY) {
     const chunk = ranges.slice(i, i + CONCURRENCY);
     const results = await Promise.allSettled(chunk.map(r => 
       rpc(rpcUrl, 'eth_getLogs', [{
-        address: CONTRACT, topics: [TRANSFER_TOPIC],
+        address: contractAddr, topics: [TRANSFER_TOPIC],
         fromBlock: `0x${r.from.toString(16)}`, toBlock: `0x${r.to.toString(16)}`,
       }])
     ));
@@ -179,16 +175,6 @@ async function fetchViaBlockscout(explorerUrl) {
   const total = holders.reduce((s, h) => s + parseFloat(h.balance), 0);
   holders.forEach(h => h.percentage = total > 0 ? Math.round((parseFloat(h.balance) / total) * 10000) / 100 : 0);
   return holders;
-}
-
-// ── Lisk ────────────────────────────────────────────────────────
-async function fetchLisk() {
-  return fetchViaBlockscout('https://blockscout.lisk.com/api/v2/tokens/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22/holders');
-}
-
-// ── Base ────────────────────────────────────────────────────────
-async function fetchBase() {
-  return fetchViaBlockscout('https://base.blockscout.com/api/v2/tokens/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22/holders');
 }
 
 // ── Solana ──────────────────────────────────────────────────────
@@ -235,19 +221,25 @@ async function fetchSolana() {
 }
 
 // ── Chains ──────────────────────────────────────────────────────
-// Note: 1rpc.io Base is a pruned node — needs an archive RPC for historical holders.
-// Polygon & BNB: same address has no contract deployed on those chains.
 const CHAINS = [
   { id: 'base',    name: 'Base',
-    fetch: () => fetchBase(),
+    fetch: () => fetchViaBlockscout('https://base.blockscout.com/api/v2/tokens/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22/holders'),
     explorer: `https://base.blockscout.com/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
-  { id: 'polygon', name: 'Polygon', fetch: () => { throw new Error('No contract at this address'); }, explorer: '' },
-  { id: 'bnb',     name: 'BNB',     fetch: () => { throw new Error('No contract at this address'); }, explorer: '' },
+  { id: 'polygon', name: 'Polygon',
+    fetch: () => fetchViaBlockscout(`https://polygon.blockscout.com/api/v2/tokens/${CONTRACT2}/holders`),
+    explorer: `https://polygon.blockscout.com/token/${CONTRACT2}?a=` },
+  { id: 'bnb',     name: 'BNB',
+    fetch: () => fetchEVM('https://bsc.drpc.org', CONTRACT2),
+    explorer: `https://bscscan.com/token/${CONTRACT2}?a=` },
   { id: 'kaia',    name: 'Kaia',
-    fetch: RPC_KAIA ? () => fetchEVM(RPC_KAIA) : () => { throw new Error('Configure RPC_KAIA env var'); },
+    fetch: RPC_KAIA ? () => fetchEVM(RPC_KAIA, CONTRACT) : () => { throw new Error('Configure RPC_KAIA env var'); },
     explorer: `https://kaiascan.io/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
-  { id: 'lisk',    name: 'Lisk',    fetch: () => fetchLisk(),   explorer: `https://blockscout.lisk.com/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
-  { id: 'solana',  name: 'Solana',  fetch: () => fetchSolana(), explorer: 'https://solscan.io/account/' },
+  { id: 'lisk',    name: 'Lisk',
+    fetch: () => fetchViaBlockscout('https://blockscout.lisk.com/api/v2/tokens/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22/holders'),
+    explorer: `https://blockscout.lisk.com/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
+  { id: 'solana',  name: 'Solana',
+    fetch: () => fetchSolana(),
+    explorer: 'https://solscan.io/account/' },
 ];
 
 async function fetchAll() {
