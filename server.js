@@ -1,7 +1,10 @@
 const express = require('express');
-const { Connection, PublicKey } = require('@solana/web3.js');
 const path = require('path');
 const app = express();
+
+// Solana — lazy import so it doesn't crash Vercel if unavailable
+let solanaWeb3 = null;
+try { solanaWeb3 = require('@solana/web3.js'); } catch (_) { }
 
 const PORT = process.env.PORT || 3000;
 const CONTRACT = '0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22';
@@ -95,7 +98,9 @@ async function fetchLisk() {
 
 // ── Solana ──────────────────────────────────────────────────────
 async function fetchSolana() {
-  const conn = new Connection('https://api.mainnet-beta.solana.com', 'confirmed');
+  if (!solanaWeb3) throw new Error('@solana/web3.js not available');
+  const { Connection, PublicKey } = solanaWeb3;
+  const conn = new Connection('https://api.mainnet-beta.solana.com', { commitment: 'confirmed', confirmTransactionInitialTimeout: 8000 });
   const mint = new PublicKey(SOL_MINT);
   const accounts = await conn.getProgramAccounts(
     new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
@@ -162,6 +167,11 @@ app.get('/api/holders', async (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+// ── Global error handler (important for Vercel) ──────────────────
+app.use((err, req, res, next) => {
+  res.status(500).json({ error: err.message || 'Internal error' });
+});
+
 // Export for Vercel
 module.exports = app;
 
