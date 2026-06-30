@@ -78,6 +78,15 @@
   .bar-wrap { display: inline-block; width: 50px; height: 4px; background: #21262d; border-radius: 2px; vertical-align: middle; margin-left: 4px; }
   .bar-fill { height: 100%; border-radius: 2px; background: #58a6ff; transition: width .3s; }
 
+  .tags-col { max-width: 80px; }
+  .chain-tag { display: inline-block; font-size: 9px; font-weight: 600; padding: 1px 5px; border-radius: 4px; margin: 1px; text-transform: uppercase; }
+  .chain-tag.base { background: #0052FF22; color: #5A8CFF; }
+  .chain-tag.polygon { background: #8247E522; color: #A87AFF; }
+  .chain-tag.bnb { background: #F0B90B22; color: #F0D060; }
+  .chain-tag.kaia { background: #56447A22; color: #8A7AB0; }
+  .chain-tag.lisk { background: #2F68F822; color: #6A9AFF; }
+  .chain-tag.solana { background: #9945FF22; color: #BB7AFF; }
+
   footer { margin-top: 24px; text-align: center; font-size: 12px; color: #484f58; }
 
   .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #30363d; border-top-color: #58a6ff; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; margin-right: 6px; }
@@ -106,7 +115,10 @@ const CHAINS = [
   { id: 'kaia',    name: 'Kaia',    color: '#56447A', explorer: (a) => `https://kaiascan.io/address/${a}` },
   { id: 'lisk',    name: 'Lisk',    color: '#2F68F8', explorer: (a) => `https://blockscout.lisk.com/address/${a}` },
   { id: 'solana',  name: 'Solana',  color: '#9945FF', explorer: (a) => `https://solscan.io/account/${a}` },
+  { id: 'combined',name: 'Total (All EVM)', color: '#FF6B35', explorer: (a) => `https://basescan.org/address/${a}` },
 ];
+
+const CHAIN_LABELS = { base:'Base', polygon:'Polygon', bnb:'BNB', kaia:'Kaia', lisk:'Lisk', solana:'Solana' };
 
 function truncate(a) { return a.length > 16 ? a.slice(0, 6) + '...' + a.slice(-4) : a; }
 
@@ -151,15 +163,20 @@ function renderCard(chain, state) {
   let rows = '';
   h.forEach((x, i) => {
     const pctBar = (parseFloat(x.balance) / maxBal) * 100;
+    const chainTags = x.chains
+      ? x.chains.map(c => `<span class="chain-tag ${c}">${CHAIN_LABELS[c] || c}</span>`).join(' ')
+      : '';
     rows += `<tr>
       <td class="rank-col">${i + 1}</td>
       <td class="addr-col">${chain.explorer ? `<a href="${chain.explorer(x.address)}" target="_blank" rel="noopener">${truncate(x.address)}</a>` : truncate(x.address)}</td>
+      ${x.chains ? `<td class="tags-col">${chainTags}</td>` : ''}
       <td class="bal-col">${formatBal(x.balance)}</td>
       <td class="pct-col">${(x.percentage || 0).toFixed(1)}%<span class="bar-wrap"><span class="bar-fill" style="width:${Math.min(pctBar, 100)}%"></span></span></td>
     </tr>`;
   });
 
-  card.innerHTML = `<div class="card-header" style="border-left:3px solid ${chain.color}"><span>${chain.name}</span><span class="badge">${h.length} holders</span></div><table class="holder-table"><thead><tr><th>#</th><th>Address</th><th style="text-align:right">Balance</th><th style="text-align:right">%</th></tr></thead><tbody>${rows}</tbody></table>`;
+  const hasTags = h[0] && h[0].chains;
+  card.innerHTML = `<div class="card-header" style="border-left:3px solid ${chain.color}"><span>${chain.name}</span><span class="badge">${h.length} holders</span></div><table class="holder-table"><thead><tr><th>#</th><th>Address</th>${hasTags ? '<th>Chains</th>' : ''}<th style="text-align:right">Balance</th><th style="text-align:right">%</th></tr></thead><tbody>${rows}</tbody></table>`;
   return card;
 }
 

@@ -192,7 +192,36 @@ async function fetchAll() {
 app.get('/api/holders', async (req, res) => {
   const now = Date.now();
   if (cache.data && now - cache.ts < CACHE_TTL) return res.json(cache.data);
-  cache.data = await fetchAll();
+  const raw = await fetchAll();
+
+  // Compute combined: aggregate same EVM address across chains (exclude Solana)
+  const combined = new Map();
+  for (const [id, chain] of Object.entries(raw)) {
+    if (id === 'solana' || chain.error) continue;
+    for (const h of chain.holders) {
+      const a = h.address.toLowerCase();
+      const existing = combined.get(a) || { address: h.address, totalRaw: 0n, chains: [] };
+      existing.totalRaw += BigInt(h.raw);
+      existing.chains.push(id);
+      combined.set(a, existing);
+    }
+  }
+
+  const combinedHolders = [...combined.values()]
+    .filter(h => h.totalRaw > 0n)
+    .sort((a, b) => b.totalRaw > a.totalRaw ? 1 : -1)
+    .slice(0, TOP_N)
+    .map(h => ({
+      address: h.address,
+      balance: (Number(h.totalRaw) / Math.pow(10, DECIMALS)).toFixed(DECIMALS),
+      raw: h.totalRaw.toString(),
+      percentage: 0,
+      chains: h.chains,
+    }));
+  const combTotal = combinedHolders.reduce((s, h) => s + parseFloat(h.balance), 0);
+  combinedHolders.forEach(h => h.percentage = combTotal > 0 ? Math.round((parseFloat(h.balance) / combTotal) * 10000) / 100 : 0);
+
+  cache.data = { ...raw, combined: { name: 'Total (All EVM)', holders: combinedHolders, error: null } };
   cache.ts = Date.now();
   res.json(cache.data);
 });
