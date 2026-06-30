@@ -40,7 +40,7 @@ async function detectRPC(rpcUrl, contractAddr) {
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
   const latest = BigInt(latestHex);
 
-  for (const size of [10000, 2000, 500, 100, 50, 10, 1]) {
+  for (const size of [1000, 100, 50, 10, 1]) {
     const from = latest - BigInt(size) > 0n ? latest - BigInt(size) : 0n;
     let success = false;
     for (let retry = 0; retry < 3 && !success; retry++) {
