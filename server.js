@@ -234,7 +234,7 @@ const CHAINS = [
     fetch: () => { throw new Error('BSC RPCs require archive node for historical logs. Contract is deployed at 0x649a...742cc'); },
     explorer: `https://bscscan.com/token/${CONTRACT2}?a=` },
   { id: 'kaia',    name: 'Kaia',
-    fetch: () => fetchEVM(RPC_KAIA, CONTRACT, 210_600_000n),
+    fetch: () => fetchEVM(RPC_KAIA, CONTRACT, 210_680_000n),
     explorer: `https://kaiascan.io/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
   { id: 'lisk',    name: 'Lisk',
     fetch: () => fetchViaBlockscout('https://blockscout.lisk.com/api/v2/tokens/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22/holders'),
@@ -283,7 +283,7 @@ app.get('/api/holders', async (req, res) => {
     .sort((a, b) => b.totalBal - a.totalBal)
     .slice(0, TOP_N);
   const combTotal = combHolders.reduce((s, h) => s + h.totalBal, 0);
-  return combHolders.map(h => ({
+  const formatted = combHolders.map(h => ({
     address: h.address,
     balance: formatNumber(h.totalBal),
     raw: h.totalBal.toString(),
@@ -299,7 +299,7 @@ function formatNumber(n) {
   return n.toFixed(2);
 }
 
-  cache.data = { ...raw, combined: { name: 'Total (All Chains)', holders: combHolders, error: null } };
+  cache.data = { ...raw, combined: { name: 'Total (All Chains)', holders: formatted, error: null } };
   cache.ts = Date.now();
   res.json(cache.data);
 });
