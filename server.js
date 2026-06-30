@@ -40,14 +40,9 @@ async function findFirstTransfer(rpcUrl, batchSize) {
   let lo = 0n, hi = latest;
   const zeroAddr = '0x0000000000000000000000000000000000000000';
 
-  // Check if any transfers exist
-  const firstCheck = await rpc(rpcUrl, 'eth_getLogs', [{
-    address: CONTRACT, topics: [TRANSFER_TOPIC],
-    fromBlock: '0x0', toBlock: `0x${latest.toString(16)}`,
-  }]).catch(() => null);
-  if (!firstCheck || firstCheck.length === 0) return null;
+  // Skip full-range check (may exceed RPC block-range limits like 1rpc's 50-block cap).
+  // Binary search with small ranges handles this automatically.
 
-  // Binary search: narrow down to a batchSize-wide range
   while (lo + BigInt(batchSize) < hi) {
     const mid = (lo + hi) / 2n;
     const from = mid;
