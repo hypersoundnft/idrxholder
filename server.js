@@ -43,7 +43,7 @@ async function detectRPC(rpcUrl) {
   const latest = BigInt(latestHex);
   let batchSize = null, archive = true, fatal = false;
 
-  for (const size of [10000, 5000, 2000, 1000, 500, 200, 100, 50, 10, 1]) {
+  for (const size of [10000, 50, 1]) {
     if (fatal) break;
     const from = latest - BigInt(size) > 0n ? latest - BigInt(size) : 0n;
     try {
@@ -56,7 +56,7 @@ async function detectRPC(rpcUrl) {
     } catch (e) {
       const msg = e.message.toLowerCase();
       if (msg.includes('pruned') || msg.includes('archive')) { archive = false; break; }
-      if (msg.includes('forbidden') || msg.includes('429') || msg.includes('timeout') || msg.includes('non-json')) {
+      if (msg.includes('forbidden') || msg.includes('429') || msg.includes('timeout') || msg.includes('non-json') || msg.includes('temporary internal') || msg.includes('rate limit')) {
         fatal = true; // RPC is unreachable or blocked
       }
     }
@@ -233,13 +233,18 @@ async function fetchSolana() {
 }
 
 // ── Chains ──────────────────────────────────────────────────────
-// batchSize: 50 for 1rpc.io (50-block getLogs limit), 10000 for dRPC/public
+// Note: 1rpc.io Base is a pruned node — needs an archive RPC for historical holders.
+// Polygon & BNB: same address has no contract deployed on those chains.
 const CHAINS = [
-  { id: 'base',    name: 'Base',    fetch: RPC_BASE    ? () => fetchEVM(RPC_BASE)    : () => { throw new Error('Set env RPC_BASE'); },    explorer: `https://basescan.org/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
-  { id: 'polygon', name: 'Polygon', fetch: RPC_POLYGON ? () => fetchEVM(RPC_POLYGON) : () => { throw new Error('Set env RPC_POLYGON'); },         explorer: '' },
-  { id: 'bnb',     name: 'BNB',     fetch: RPC_BNB     ? () => fetchEVM(RPC_BNB)     : () => { throw new Error('Set env RPC_BNB'); },               explorer: '' },
-  { id: 'kaia',    name: 'Kaia',    fetch: RPC_KAIA    ? () => fetchEVM(RPC_KAIA)    : () => { throw new Error('Set env RPC_KAIA'); },              explorer: `https://kaiascan.io/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
-  { id: 'lisk',    name: 'Lisk',    fetch: () => fetchLisk(), explorer: `https://blockscout.lisk.com/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
+  { id: 'base',    name: 'Base',
+    fetch: RPC_BASE ? () => fetchEVM(RPC_BASE) : () => { throw new Error('Configure RPC_BASE env var'); },
+    explorer: `https://basescan.org/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
+  { id: 'polygon', name: 'Polygon', fetch: () => { throw new Error('No contract at this address'); }, explorer: '' },
+  { id: 'bnb',     name: 'BNB',     fetch: () => { throw new Error('No contract at this address'); }, explorer: '' },
+  { id: 'kaia',    name: 'Kaia',
+    fetch: RPC_KAIA ? () => fetchEVM(RPC_KAIA) : () => { throw new Error('Configure RPC_KAIA env var'); },
+    explorer: `https://kaiascan.io/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
+  { id: 'lisk',    name: 'Lisk',    fetch: () => fetchLisk(),   explorer: `https://blockscout.lisk.com/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
   { id: 'solana',  name: 'Solana',  fetch: () => fetchSolana(), explorer: 'https://solscan.io/account/' },
 ];
 
