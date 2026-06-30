@@ -12,6 +12,7 @@ const DECIMALS = 2;
 const CACHE_TTL = 600_000;
 
 const RPC_KAIA = process.env.RPC_KAIA || 'https://klaytn.drpc.org';
+const RPC_BNB = process.env.RPC_BNB || 'https://bsc.drpc.org';
 
 let cache = { data: null, ts: 0 };
 let _reqId = 1;
@@ -246,7 +247,7 @@ const CHAINS = [
     fetch: () => fetchViaBlockscout(`https://polygon.blockscout.com/api/v2/tokens/${CONTRACT2}/holders`),
     explorer: `https://polygon.blockscout.com/token/${CONTRACT2}?a=` },
   { id: 'bnb',     name: 'BNB',
-    fetch: () => { throw new Error('BSC RPCs require archive node for historical logs. Contract is deployed at 0x649a...742cc'); },
+    fetch: () => fetchEVM(RPC_BNB, CONTRACT2),
     explorer: `https://bscscan.com/token/${CONTRACT2}?a=` },
   { id: 'kaia',    name: 'Kaia',
     fetch: () => fetchEVM(RPC_KAIA, CONTRACT, 210_686_000n),
