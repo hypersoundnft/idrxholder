@@ -21,7 +21,7 @@ let _reqId = 1;
 // ── RPC helper ──────────────────────────────────────────────────
 let _rpcStagger = 0;
 async function rpc(url, method, params) {
-  await new Promise(r => setTimeout(r, 60 + (_rpcStagger++ % 50) * 2));
+  await new Promise(r => setTimeout(r, 100 + (_rpcStagger++ % 30) * 5));
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -125,7 +125,7 @@ async function fetchEVM(rpcUrl) {
   const latest = BigInt(latestHex);
   const balances = new Map();
   const zeroAddr = '0x0000000000000000000000000000000000000000';
-  const CONCURRENCY = batchSize <= 100 ? 25 : 15; // faster for small-batch RPCs
+  const CONCURRENCY = batchSize <= 100 ? 10 : 6; // avoid rate limiting on free RPCs
 
   // Build range chunks — scan from firstBlock forward.
   // With small batch sizes (e.g. 50), cap at 500K blocks so the scan completes in time.
