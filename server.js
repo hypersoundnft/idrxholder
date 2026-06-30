@@ -111,8 +111,7 @@ async function findFirstTransfer(rpcUrl, batchSize, contractAddr, knownFloor = 0
   return null;
 }
 
-// ── EVM: backward scan from tip until no transfers found ──────────
-// Much faster: only scans the active recent range instead of all blocks
+// ── EVM: smart scan (backward from tip, or forward from floor) ──
 async function fetchEVM(rpcUrl, contractAddr, knownFloor = 0n) {
   const batchSize = await detectRPC(rpcUrl, contractAddr);
 
@@ -120,40 +119,50 @@ async function fetchEVM(rpcUrl, contractAddr, knownFloor = 0n) {
   const latest = BigInt(latestHex);
   const balances = new Map();
   const zeroAddr = '0x0000000000000000000000000000000000000000';
-  const CONCURRENCY = 10;
+  const MAX_BATCHES = 500;
 
-  // Scan backward from latest in chunks. Stop when we hit 5 consecutive empty chunks
-  // or pass the known floor, whichever comes first.
   let lo = knownFloor > 0n ? knownFloor : 0n;
-  let tip = latest;
-  let emptyStreak = 0;
   let totalBatches = 0;
-  const MAX_BATCHES = 500; // safety cap (approx 500K blocks at 1K batch, 25K at 50 batch)
 
-  while (tip > lo && totalBatches < MAX_BATCHES) {
-    const from = tip - BigInt(batchSize) > lo ? tip - BigInt(batchSize) : lo;
-
-    const logs = await rpc(rpcUrl, 'eth_getLogs', [{
-      address: contractAddr, topics: [TRANSFER_TOPIC],
-      fromBlock: `0x${from.toString(16)}`, toBlock: `0x${tip.toString(16)}`,
-    }]);
-
-    totalBatches++;
-    for (const log of logs) {
-      const f = parseAddr(log.topics[1]), t = parseAddr(log.topics[2]);
-      const v = BigInt(log.data);
-      if (f !== zeroAddr) balances.set(f, (balances.get(f) || 0n) - v);
-      if (t !== zeroAddr) balances.set(t, (balances.get(t) || 0n) + v);
+  if (knownFloor > 0n) {
+    // Forward scan from known deployment block to tip
+    let from = knownFloor;
+    while (from <= latest && totalBatches < MAX_BATCHES) {
+      const to = from + BigInt(batchSize) - 1n > latest ? latest : from + BigInt(batchSize) - 1n;
+      const logs = await rpc(rpcUrl, 'eth_getLogs', [{
+        address: contractAddr, topics: [TRANSFER_TOPIC],
+        fromBlock: `0x${from.toString(16)}`, toBlock: `0x${to.toString(16)}`,
+      }]);
+      totalBatches++;
+      for (const log of logs) {
+        const f = parseAddr(log.topics[1]), t = parseAddr(log.topics[2]);
+        const v = BigInt(log.data);
+        if (f !== zeroAddr) balances.set(f, (balances.get(f) || 0n) - v);
+        if (t !== zeroAddr) balances.set(t, (balances.get(t) || 0n) + v);
+      }
+      from = to + 1n;
     }
-
-    if (logs.length === 0) {
-      emptyStreak++;
-      if (emptyStreak >= 5) break; // no transfers in a while — we've gone past all activity
-    } else {
-      emptyStreak = 0;
+  } else {
+    // Backward scan from tip — stops after 5 consecutive empty batches
+    let tip = latest;
+    let emptyStreak = 0;
+    while (tip > lo && totalBatches < MAX_BATCHES) {
+      const from = tip - BigInt(batchSize) > lo ? tip - BigInt(batchSize) : lo;
+      const logs = await rpc(rpcUrl, 'eth_getLogs', [{
+        address: contractAddr, topics: [TRANSFER_TOPIC],
+        fromBlock: `0x${from.toString(16)}`, toBlock: `0x${tip.toString(16)}`,
+      }]);
+      totalBatches++;
+      for (const log of logs) {
+        const f = parseAddr(log.topics[1]), t = parseAddr(log.topics[2]);
+        const v = BigInt(log.data);
+        if (f !== zeroAddr) balances.set(f, (balances.get(f) || 0n) - v);
+        if (t !== zeroAddr) balances.set(t, (balances.get(t) || 0n) + v);
+      }
+      if (logs.length === 0) { emptyStreak++; if (emptyStreak >= 5) break; }
+      else emptyStreak = 0;
+      tip = from - 1n;
     }
-
-    tip = from - 1n;
   }
 
   if (balances.size === 0) return [];
