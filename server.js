@@ -19,8 +19,9 @@ let cache = { data: null, ts: 0 };
 let _reqId = 1;
 
 // ── RPC helper ──────────────────────────────────────────────────
+let _rpcStagger = 0;
 async function rpc(url, method, params) {
-  await new Promise(r => setTimeout(r, 60));
+  await new Promise(r => setTimeout(r, 60 + (_rpcStagger++ % 50) * 2));
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -33,15 +34,29 @@ async function rpc(url, method, params) {
 
 function parseAddr(hex) { return '0x' + hex.slice(26).toLowerCase(); }
 
+// ── Detect RPC batch limit ─────────────────────────────────────
+async function detectBatchSize(rpcUrl) {
+  const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
+  const latest = BigInt(latestHex);
+  // Try increasingly smaller ranges until one succeeds
+  for (const size of [10000, 5000, 2000, 1000, 500, 200, 100, 50, 10, 1]) {
+    try {
+      await rpc(rpcUrl, 'eth_getLogs', [{
+        address: CONTRACT, topics: [TRANSFER_TOPIC],
+        fromBlock: `0x${(latest - BigInt(size)).toString(16)}`,
+        toBlock: `0x${latest.toString(16)}`,
+      }]);
+      return size;
+    } catch (_) { /* try smaller */ }
+  }
+  return 1;
+}
+
 // ── EVM: binary search for first transfer block ─────────────────
 async function findFirstTransfer(rpcUrl, batchSize) {
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
   const latest = BigInt(latestHex);
   let lo = 0n, hi = latest;
-  const zeroAddr = '0x0000000000000000000000000000000000000000';
-
-  // Skip full-range check (may exceed RPC block-range limits like 1rpc's 50-block cap).
-  // Binary search with small ranges handles this automatically.
 
   while (lo + BigInt(batchSize) < hi) {
     const mid = (lo + hi) / 2n;
@@ -80,12 +95,15 @@ async function fetchEVM(rpcUrl, batchSize) {
   const latest = BigInt(latestHex);
   const balances = new Map();
   const zeroAddr = '0x0000000000000000000000000000000000000000';
-  const CONCURRENCY = 15;
+  const CONCURRENCY = batchSize <= 100 ? 25 : 15; // faster for small-batch RPCs
 
-  // Build all range chunks
+  // Build range chunks — scan from firstBlock forward.
+  // With small batch sizes (e.g. 50), cap at 500K blocks so the scan completes in time.
+  const maxScanBlocks = batchSize <= 100 ? 500_000n : (latest - firstBlock);
+  const scanEnd = firstBlock + maxScanBlocks > latest ? latest : firstBlock + maxScanBlocks;
   const ranges = [];
-  for (let b = firstBlock; b <= latest; b += BigInt(batchSize)) {
-    const to = b + BigInt(batchSize) - 1n > latest ? latest : b + BigInt(batchSize) - 1n;
+  for (let b = firstBlock; b <= scanEnd; b += BigInt(batchSize)) {
+    const to = b + BigInt(batchSize) - 1n > scanEnd ? scanEnd : b + BigInt(batchSize) - 1n;
     ranges.push({ from: b, to });
   }
 
