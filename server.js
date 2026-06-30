@@ -42,35 +42,47 @@ async function detectRPC(rpcUrl) {
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
   const latest = BigInt(latestHex);
 
-  // Try from largest (10K) down to smallest (1) — prefer biggest that works
+  // Try large (10K) first, fall back to smaller — with retry on rate limits
   for (const size of [10000, 2000, 500, 100, 50, 10, 1]) {
     const from = latest - BigInt(size) > 0n ? latest - BigInt(size) : 0n;
-    try {
-      await rpc(rpcUrl, 'eth_getLogs', [{
-        address: CONTRACT, topics: [TRANSFER_TOPIC],
-        fromBlock: `0x${from.toString(16)}`, toBlock: `0x${latest.toString(16)}`,
-      }]);
-      // Also check archive: query 100K blocks back with same batch size
-      if (latest > 100_000n) {
-        const testFrom = latest - BigInt(100_000);
-        const to = testFrom + BigInt(size) > latest ? latest : testFrom + BigInt(size);
+    let success = false;
+    for (let retry = 0; retry < 3 && !success; retry++) {
+      try {
+        await rpc(rpcUrl, 'eth_getLogs', [{
+          address: CONTRACT, topics: [TRANSFER_TOPIC],
+          fromBlock: `0x${from.toString(16)}`, toBlock: `0x${latest.toString(16)}`,
+        }]);
+        success = true;
+      } catch (e) {
+        const msg = e.message.toLowerCase();
+        if (msg.includes('pruned')) throw new Error('RPC is pruned — needs an archive node');
+        if (msg.includes('range') || msg.includes('limited') || msg.includes('max')) break; // try smaller
+        if (msg.includes('timeout') || msg.includes('too many') || msg.includes('rate limit') || msg.includes('temporary')) {
+          await new Promise(r => setTimeout(r, 500 * (retry + 1))); // backoff
+          continue;
+        }
+        throw e;
+      }
+    }
+    if (!success) continue;
+
+    // Check archive access with a tiny range 100K blocks back
+    if (latest > 100_000n) {
+      const testFrom = latest - BigInt(100_000);
+      const to = testFrom + 49n > latest ? latest : testFrom + 49n;
+      try {
         await rpc(rpcUrl, 'eth_getLogs', [{
           address: CONTRACT, topics: [TRANSFER_TOPIC],
           fromBlock: `0x${testFrom.toString(16)}`, toBlock: `0x${to.toString(16)}`,
         }]);
+      } catch (e) {
+        if (e.message.toLowerCase().includes('pruned')) throw new Error('RPC is pruned — needs an archive node');
+        // archive check failed but RPC still usable for recent data
       }
-      return { batchSize: size };
-    } catch (e) {
-      const msg = e.message.toLowerCase();
-      if (msg.includes('pruned')) throw new Error('RPC is pruned — needs an archive node');
-      if (msg.includes('range') || msg.includes('limited') || msg.includes('max')) continue; // try smaller
-      if (msg.includes('forbidden') || msg.includes('429') || msg.includes('timeout') || msg.includes('non-json') || msg.includes('temporary') || msg.includes('rate limit') || msg.includes('too many')) {
-        throw new Error('RPC unavailable or rate-limited — try a different provider');
-      }
-      throw e;
     }
+    return { batchSize: size };
   }
-  throw new Error('RPC does not support eth_getLogs');
+  throw new Error('RPC unavailable or incompatible');
 }
 
 // ── EVM: binary search for first transfer block ─────────────────
