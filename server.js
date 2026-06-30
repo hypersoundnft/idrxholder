@@ -34,22 +34,41 @@ async function rpc(url, method, params) {
 
 function parseAddr(hex) { return '0x' + hex.slice(26).toLowerCase(); }
 
-// ── Detect RPC batch limit ─────────────────────────────────────
-async function detectBatchSize(rpcUrl) {
+// ── Detect RPC capabilities ────────────────────────────────────
+async function detectRPC(rpcUrl) {
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
   const latest = BigInt(latestHex);
-  // Try increasingly smaller ranges until one succeeds
+  // Check if RPC supports archive (historical) getLogs by querying far from tip
+  let batchSize = null, archive = true;
   for (const size of [10000, 5000, 2000, 1000, 500, 200, 100, 50, 10, 1]) {
+    const from = latest - BigInt(size) > 0n ? latest - BigInt(size) : 0n;
     try {
       await rpc(rpcUrl, 'eth_getLogs', [{
         address: CONTRACT, topics: [TRANSFER_TOPIC],
-        fromBlock: `0x${(latest - BigInt(size)).toString(16)}`,
-        toBlock: `0x${latest.toString(16)}`,
+        fromBlock: `0x${from.toString(16)}`, toBlock: `0x${latest.toString(16)}`,
       }]);
-      return size;
-    } catch (_) { /* try smaller */ }
+      batchSize = size;
+      break;
+    } catch (e) {
+      const msg = e.message.toLowerCase();
+      if (msg.includes('pruned') || msg.includes('archive')) { archive = false; break; }
+    }
   }
-  return 1;
+  // If recent blocks work, test archive: query 100K blocks back
+  if (batchSize && latest > 100_000n) {
+    const testFrom = latest - BigInt(100_000);
+    try {
+      await rpc(rpcUrl, 'eth_getLogs', [{
+        address: CONTRACT, topics: [TRANSFER_TOPIC],
+        fromBlock: `0x${testFrom.toString(16)}`, toBlock: `0x${(testFrom + BigInt(batchSize)).toString(16)}`,
+      }]);
+    } catch (e) {
+      if (e.message.toLowerCase().includes('pruned') || e.message.toLowerCase().includes('archive')) {
+        archive = false;
+      }
+    }
+  }
+  return { batchSize: batchSize || 1, archive };
 }
 
 // ── EVM: binary search for first transfer block ─────────────────
@@ -86,8 +105,13 @@ async function findFirstTransfer(rpcUrl, batchSize) {
   return null;
 }
 
-// ── EVM: parallel scan from first block to latest ──────────────
-async function fetchEVM(rpcUrl, batchSize) {
+// ── EVM: dynamic RPC detection + parallel scan ─────────────────
+async function fetchEVM(rpcUrl, _unused) {
+  const caps = await detectRPC(rpcUrl);
+  if (!caps.archive) throw new Error('RPC is pruned — needs an archive node for historical data. Try Alchemy, QuickNode, or Infura.');
+  const batchSize = caps.batchSize;
+  if (batchSize <= 3) throw new Error('RPC batch limit too small ('+batchSize+' blocks) for scanning');
+
   const firstBlock = await findFirstTransfer(rpcUrl, batchSize);
   if (firstBlock === null) return [];
 
@@ -204,10 +228,10 @@ async function fetchSolana() {
 // ── Chains ──────────────────────────────────────────────────────
 // batchSize: 50 for 1rpc.io (50-block getLogs limit), 10000 for dRPC/public
 const CHAINS = [
-  { id: 'base',    name: 'Base',    fetch: RPC_BASE    ? () => fetchEVM(RPC_BASE, 50)    : () => { throw new Error('Set env RPC_BASE'); },    explorer: `https://basescan.org/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=`, defaultRpc: 'https://1rpc.io/base' },
-  { id: 'polygon', name: 'Polygon', fetch: RPC_POLYGON ? () => fetchEVM(RPC_POLYGON, 50) : () => { throw new Error('Not deployed'); },              explorer: '', defaultRpc: 'https://1rpc.io/matic' },
-  { id: 'bnb',     name: 'BNB',     fetch: RPC_BNB     ? () => fetchEVM(RPC_BNB, 50)     : () => { throw new Error('Not deployed'); },              explorer: '', defaultRpc: 'https://1rpc.io/bnb' },
-  { id: 'kaia',    name: 'Kaia',    fetch: RPC_KAIA    ? () => fetchEVM(RPC_KAIA, 10000) : () => { throw new Error('Set env RPC_KAIA'); },          explorer: `https://kaiascan.io/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=`, defaultRpc: '(use dRPC, Alchemy, etc.)' },
+  { id: 'base',    name: 'Base',    fetch: RPC_BASE    ? () => fetchEVM(RPC_BASE)    : () => { throw new Error('Set env RPC_BASE'); },    explorer: `https://basescan.org/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
+  { id: 'polygon', name: 'Polygon', fetch: RPC_POLYGON ? () => fetchEVM(RPC_POLYGON) : () => { throw new Error('Set env RPC_POLYGON'); },         explorer: '' },
+  { id: 'bnb',     name: 'BNB',     fetch: RPC_BNB     ? () => fetchEVM(RPC_BNB)     : () => { throw new Error('Set env RPC_BNB'); },               explorer: '' },
+  { id: 'kaia',    name: 'Kaia',    fetch: RPC_KAIA    ? () => fetchEVM(RPC_KAIA)    : () => { throw new Error('Set env RPC_KAIA'); },              explorer: `https://kaiascan.io/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
   { id: 'lisk',    name: 'Lisk',    fetch: () => fetchLisk(), explorer: `https://blockscout.lisk.com/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
   { id: 'solana',  name: 'Solana',  fetch: () => fetchSolana(), explorer: 'https://solscan.io/account/' },
 ];
