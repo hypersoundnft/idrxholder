@@ -68,10 +68,12 @@ async function detectRPC(rpcUrl, contractAddr) {
 }
 
 // ── EVM: binary search for first transfer block ─────────────────
-async function findFirstTransfer(rpcUrl, batchSize, contractAddr) {
+async function findFirstTransfer(rpcUrl, batchSize, contractAddr, knownFloor = 0n) {
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
   const latest = BigInt(latestHex);
-  let lo = 0n, hi = latest;
+  let lo = knownFloor, hi = latest;
+
+  if (lo >= hi) { lo = 0n; hi = latest; } // fallback
 
   while (lo + BigInt(batchSize) < hi) {
     const mid = (lo + hi) / 2n;
@@ -110,10 +112,10 @@ async function findFirstTransfer(rpcUrl, batchSize, contractAddr) {
 }
 
 // ── EVM: auto-detect + parallel scan ───────────────────────────
-async function fetchEVM(rpcUrl, contractAddr) {
+async function fetchEVM(rpcUrl, contractAddr, knownFloor = 0n) {
   const batchSize = await detectRPC(rpcUrl, contractAddr);
 
-  const firstBlock = await findFirstTransfer(rpcUrl, batchSize, contractAddr);
+  const firstBlock = await findFirstTransfer(rpcUrl, batchSize, contractAddr, knownFloor);
   if (firstBlock === null) return [];
 
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
@@ -229,10 +231,10 @@ const CHAINS = [
     fetch: () => fetchViaBlockscout(`https://polygon.blockscout.com/api/v2/tokens/${CONTRACT2}/holders`),
     explorer: `https://polygon.blockscout.com/token/${CONTRACT2}?a=` },
   { id: 'bnb',     name: 'BNB',
-    fetch: () => fetchEVM('https://bsc.drpc.org', CONTRACT2),
+    fetch: () => fetchEVM('https://bsc-mainnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3', CONTRACT2),
     explorer: `https://bscscan.com/token/${CONTRACT2}?a=` },
   { id: 'kaia',    name: 'Kaia',
-    fetch: RPC_KAIA ? () => fetchEVM(RPC_KAIA, CONTRACT) : () => { throw new Error('Configure RPC_KAIA env var'); },
+    fetch: () => fetchEVM(RPC_KAIA, CONTRACT, 210_686_600n),
     explorer: `https://kaiascan.io/token/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22?a=` },
   { id: 'lisk',    name: 'Lisk',
     fetch: () => fetchViaBlockscout('https://blockscout.lisk.com/api/v2/tokens/0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22/holders'),
