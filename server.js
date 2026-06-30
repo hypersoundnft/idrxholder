@@ -304,7 +304,7 @@ app.get('/api/holders', async (req, res) => {
     percentage: combTotal > 0 ? Math.round((h.totalBal / combTotal) * 10000) / 100 : 0,
     chains: h.chains,
   }));
-  cache.data = { ...raw, combined: { name: 'Total (All Chains)', holders: formatted, error: null } };
+  cache.data = { ...raw, combined: { name: 'Total (All EVM)', holders: formatted, error: null } };
   cache.ts = Date.now();
   res.json(cache.data);
 });
