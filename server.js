@@ -26,6 +26,7 @@ async function rpc(url, method, params) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: _reqId++, method, params }),
+    signal: AbortSignal.timeout(8000),
   });
   const text = await res.text();
   let json;
@@ -40,9 +41,10 @@ function parseAddr(hex) { return '0x' + hex.slice(26).toLowerCase(); }
 async function detectRPC(rpcUrl) {
   const latestHex = await rpc(rpcUrl, 'eth_blockNumber', []);
   const latest = BigInt(latestHex);
-  // Check if RPC supports archive (historical) getLogs by querying far from tip
-  let batchSize = null, archive = true;
+  let batchSize = null, archive = true, fatal = false;
+
   for (const size of [10000, 5000, 2000, 1000, 500, 200, 100, 50, 10, 1]) {
+    if (fatal) break;
     const from = latest - BigInt(size) > 0n ? latest - BigInt(size) : 0n;
     try {
       await rpc(rpcUrl, 'eth_getLogs', [{
@@ -54,10 +56,17 @@ async function detectRPC(rpcUrl) {
     } catch (e) {
       const msg = e.message.toLowerCase();
       if (msg.includes('pruned') || msg.includes('archive')) { archive = false; break; }
+      if (msg.includes('forbidden') || msg.includes('429') || msg.includes('timeout') || msg.includes('non-json')) {
+        fatal = true; // RPC is unreachable or blocked
+      }
     }
   }
-  // If recent blocks work, test archive: query 100K blocks back
-  if (batchSize && latest > 100_000n) {
+  if (fatal) throw new Error('RPC unreachable — check the URL is correct and accessible');
+  if (!archive) throw new Error('RPC is pruned — needs an archive node for historical data');
+  if (!batchSize || batchSize <= 3) throw new Error('RPC limits eth_getLogs too severely (max '+(batchSize||0)+' blocks)');
+
+  // Test archive: query 100K blocks back
+  if (latest > 100_000n) {
     const testFrom = latest - BigInt(100_000);
     try {
       await rpc(rpcUrl, 'eth_getLogs', [{
@@ -65,12 +74,10 @@ async function detectRPC(rpcUrl) {
         fromBlock: `0x${testFrom.toString(16)}`, toBlock: `0x${(testFrom + BigInt(batchSize)).toString(16)}`,
       }]);
     } catch (e) {
-      if (e.message.toLowerCase().includes('pruned') || e.message.toLowerCase().includes('archive')) {
-        archive = false;
-      }
+      if (e.message.toLowerCase().includes('pruned')) throw new Error('RPC is pruned — needs an archive node');
     }
   }
-  return { batchSize: batchSize || 1, archive };
+  return { batchSize, archive };
 }
 
 // ── EVM: binary search for first transfer block ─────────────────
@@ -110,9 +117,7 @@ async function findFirstTransfer(rpcUrl, batchSize) {
 // ── EVM: dynamic RPC detection + parallel scan ─────────────────
 async function fetchEVM(rpcUrl, _unused) {
   const caps = await detectRPC(rpcUrl);
-  if (!caps.archive) throw new Error('RPC is pruned — needs an archive node for historical data. Try Alchemy, QuickNode, or Infura.');
   const batchSize = caps.batchSize;
-  if (batchSize <= 3) throw new Error('RPC batch limit too small ('+batchSize+' blocks) for scanning');
 
   const firstBlock = await findFirstTransfer(rpcUrl, batchSize);
   if (firstBlock === null) return [];
