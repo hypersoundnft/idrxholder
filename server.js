@@ -27,7 +27,9 @@ async function rpc(url, method, params) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: _reqId++, method, params }),
   });
-  const json = await res.json();
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); } catch (_) { throw new Error('RPC returned non-JSON: ' + text.slice(0, 60)); }
   if (json.error) throw new Error(json.error.message || JSON.stringify(json.error));
   return json.result;
 }
